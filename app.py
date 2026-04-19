@@ -1,44 +1,62 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
 import requests, os, time, hmac, hashlib
 
 app = Flask(__name__)
 
+# Environment Variables (Railway variables se aayenge)
 API_KEY = os.getenv("API_KEY")
 SECRET_KEY = os.getenv("SECRET_KEY")
 
 def sign(params):
-    query = '&'.join([f"{k}={v}" for k,v in params.items()])
+    query = '&'.join([f"{k}={v}" for k, v in params.items()])
     return hmac.new(SECRET_KEY.encode(), query.encode(), hashlib.sha256).hexdigest()
 
 def order(symbol, side, qty):
+    endpoint = "https://fapi.binance.com/fapi/v1/order"
     params = {
-        "symbol": symbol,
-        "side": side,
+        "symbol": symbol.upper(),
+        "side": side.upper(),
         "type": "MARKET",
-        "quantity": qty,
-        "timestamp": int(time.time()*1000)
+        "quantity": float(qty),
+        "timestamp": int(time.time() * 1000),
+        "recvWindow": 5000
     }
     params["signature"] = sign(params)
-
     headers = {"X-MBX-APIKEY": API_KEY}
-    return requests.post("https://fapi.binance.com/fapi/v1/order", headers=headers, params=params).json()
+    
+    try:
+        response = requests.post(endpoint, headers=headers, params=params)
+        return response.json()
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.route('/')
 def home():
-    return "Bot Running"
+    return "Bot is Running and Ready!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.json
-    
+    print(f"Data Received: {data}") # Logs check karne ke liye
+
+    # Check if necessary data is present
+    if not data or 'symbol' not in data or 'side' not in data:
+        return jsonify({"status": "error", "message": "Invalid Data Received"}), 400
+
     symbol = data["symbol"]
     side = data["side"]
-    price = float(data["price"])
+    
+    # Qty calculation fix: 
+    # TradingView se agar qty bhej rahe ho toh wo lo, warna default 0.001 (BTC minimum)
+    qty = data.get("qty", 0.001)
 
-    qty = round((1000 * 0.01) / price, 3)
+    # Execute Order
+    res = order(symbol, side, qty)
+    
+    print(f"Binance Response: {res}")
+    return jsonify({"status": "success", "binance_response": res})
 
-    order(symbol, side.upper(), qty)
-
-    return {"status": "done"}
-
-app.run(host="0.0.0.0", port=5000)
+if __name__ == "__main__":
+    # Railway automatically defines PORT, use it or default to 5000
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
